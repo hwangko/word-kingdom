@@ -150,23 +150,26 @@ small.mute{color:var(--mute);font-weight:400}
     <div id="cTeamNames" class="row"></div>
     <small class="mute">모둠마다 2×2 크기의 근거지(🏰)가 지도에 자동 배치돼요. 근거지는 빼앗을 수 없어요.</small>
   </div>
-  <div class="card"><h3>2. 문제 / 규칙</h3>
+  <div class="card"><h3>2. 진행 방식 / 문제 / 규칙</h3>
+    <div class="row">
+      <label>진행 방식 <select id="cMode">
+        <option value="open" selected>상시 진행 (선생님이 없어도 학생이 아무 때나 접속해서 계속)</option>
+        <option value="class">수업용 (선생님이 시작·종료 버튼으로 진행)</option>
+      </select></label>
+      <label id="cEndWrap">마감일(선택, 비우면 계속) <input type="date" id="cEnd"></label>
+    </div>
     <div class="row">
       <label>출제 방향 <select id="cDir">
         <option value="k2e" selected>뜻 → 영어 단어</option>
         <option value="e2k">영어 단어 → 뜻</option>
         <option value="mix">섞어서</option>
       </select></label>
-      <label>답하는 방식 <select id="cFmt">
-        <option value="choice">4지선다 (태블릿 추천)</option>
-        <option value="type">직접 쓰기</option>
-        <option value="mix" selected>섞어서</option>
-      </select></label>
+      <span class="chip">땅 1칸 = 객관식 1문제 + 주관식 2문제 모두 정답</span>
     </div>
     <div class="row">
-      <label>문제 제한 시간(초) <input type="number" id="cLimit" min="5" max="60" value="20" style="width:70px"></label>
+      <label>문제 1개당 제한 시간(초) <input type="number" id="cLimit" min="5" max="60" value="20" style="width:70px"></label>
       <label>오답 후 쉬는 시간(초) <input type="number" id="cWrong" min="0" max="30" value="5" style="width:70px"></label>
-      <label>게임 시간(분, 0=무제한) <input type="number" id="cDur" min="0" max="120" value="20" style="width:70px"></label>
+      <label id="cDurWrap" class="hidden">게임 시간(분, 0=무제한) <input type="number" id="cDur" min="0" max="120" value="20" style="width:70px"></label>
     </div>
   </div>
   <div class="card"><h3>3. 단어 목록 <small class="mute">(한 줄에 하나: 영어,뜻 / 뜻이 여러 개면 "/" 로 구분 / 8개 이상)</small></h3>
@@ -203,8 +206,12 @@ small.mute{color:var(--mute);font-weight:400}
       <div class="roomlink"><input type="text" id="tLink" readonly style="flex:1;min-width:0;font-size:13px"><button class="btn sub sm" id="tCopy">복사</button></div>
       <h4>진행</h4>
       <div class="ctrl" id="tCtrl"></div>
-      <h4>개인 순위 (점령 칸수)</h4>
+      <h4>개인 순위 (점령 칸수 · 단어 마스터율)</h4>
       <div class="plist" id="tPlayers"></div>
+      <h4>단어 마스터율 (한 번이라도 맞힌 단어)</h4>
+      <div class="plist" id="tMastery"></div>
+      <h4>많이 틀린 단어</h4>
+      <div class="plist" id="tHard"></div>
       <h4>활동 기록</h4>
       <div class="loglist" id="tLog"></div>
       <h4>관리</h4>
@@ -463,6 +470,7 @@ function drawNames(){
 }
 $('newRoomBtn').onclick=()=>show('v-create');
 $('cBack').onclick=()=>show('v-home');
+$('cMode').onchange=()=>{const open=$('cMode').value==='open';$('cEndWrap').classList.toggle('hidden',!open);$('cDurWrap').classList.toggle('hidden',open)};
 const CODE_CHARS='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const genCode=()=>Array.from({length:4},()=>CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)]).join('');
 $('cGo').onclick=async()=>{
@@ -471,13 +479,20 @@ $('cGo').onclick=async()=>{
   const n=+$('cTeams').value, [W,H]=$('cGrid').value.split('x').map(Number);
   const names=[...$('cTeamNames').querySelectorAll('input')].map((i,k)=>i.value.trim()||(k+1)+'모둠');
   const pin=$('cPin').value.trim();
+  const mode=$('cMode').value;
+  let deadline=0;
+  if(mode==='open'&&$('cEnd').value){
+    deadline=new Date($('cEnd').value+'T23:59:59').getTime();
+    if(!(deadline>Date.now())){toast('마감일은 오늘 이후로 정해 주세요',3000);return}
+  }
   const cfg={
+    mode,deadline,
     title:$('cTitle').value.trim()||'단어왕국',n,teams:names.map(name=>({name})),W,H,
-    dir:$('cDir').value,format:$('cFmt').value,
+    dir:$('cDir').value,
     limit:Math.max(5,+$('cLimit').value||20),wrongCd:Math.max(0,+$('cWrong').value||0),
-    durationMin:Math.max(0,+$('cDur').value||0),
+    durationMin:mode==='class'?Math.max(0,+$('cDur').value||0):0,
     pinHash:pin?hashPin(pin):'',words,baseMap:makeBases(n,W,H),
-    status:'lobby',endsAt:0,remainMs:0,createdAt:Date.now()
+    status:mode==='open'?'playing':'lobby',endsAt:mode==='open'?deadline:0,remainMs:0,createdAt:Date.now()
   };
   $('cGo').disabled=true;
   try{
@@ -505,7 +520,7 @@ $('resumeBtn').onclick=async()=>{
 function teardown(){subs.forEach(u=>{try{u()}catch(e){}});subs=[];clearInterval(tick);tick=null}
 async function enterRoom(c,r){
   teardown();code=c;role=r;
-  V.cells={};V.players={};V.playersLoaded=false;V.log=[];pool=[];endedShown=false;endGuard=false;cdUntil=0;
+  V.cells={};V.players={};V.wstats={};V.playersLoaded=false;V.log=[];pool=[];endedShown=false;endGuard=false;cdUntil=0;
   const base=`rooms/${c}`;
   let s;
   try{s=await get(ref(db,base+'/config'))}catch(e){toast('연결에 실패했어요: '+e.message,4000);goHome();return}
@@ -527,8 +542,9 @@ async function enterRoom(c,r){
   subs.push(onValue(ref(db,base+'/players'),s=>{
     V.players=s.val()||{};V.playersLoaded=true;
     if(role==='student'&&!myPlayer()){toast('참가 정보가 없어서 첫 화면으로 돌아가요');goHome();return}
-    renderScores();renderMe();renderTools();
+    renderScores();renderMe();renderTools();renderBoard();
   }));
+  subs.push(onValue(ref(db,base+'/wstats'),s=>{V.wstats=s.val()||{};renderTools()}));
   subs.push(onValue(query(ref(db,base+'/log'),limitToLast(14)),s=>{
     const o=s.val()||{};V.log=Object.keys(o).sort().map(k=>o[k]);renderLog();
   }));
@@ -600,15 +616,22 @@ function renderHeader(){
 }
 $('gStatus').onclick=()=>{if(effStatus()==='ended')showResults()};
 function fmt(ms){ms=Math.max(0,ms);const s=Math.ceil(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+function fmtLong(ms){
+  ms=Math.max(0,ms);const s=Math.ceil(ms/1000),d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
+  if(d>=1)return `${d}일 ${h}시간 남음`;
+  if(h>=1)return `${h}시간 ${String(m).padStart(2,'0')}분`;
+  return fmt(ms);
+}
 function onTick(){
   const c=V.cfg;if(!c)return;
-  let txt='∞';
-  if(c.durationMin>0){
-    if(c.status==='playing'&&c.endsAt)txt=fmt(c.endsAt-now());
-    else if(c.status==='paused')txt=fmt(c.remainMs);
-    else if(c.status==='lobby')txt=fmt(c.durationMin*60000);
-    else txt='00:00';
+  let txt='계속';
+  if(c.status==='ended')txt='끝';
+  else if(c.status==='playing'&&c.endsAt)txt=fmtLong(c.endsAt-now());
+  else if(c.status==='paused'){
+    if(c.mode==='open')txt=c.deadline?fmtLong(c.deadline-now()):'계속';
+    else txt=c.durationMin>0?fmtLong(c.remainMs):'계속';
   }
+  else if(c.status==='lobby'&&c.durationMin>0)txt=fmtLong(c.durationMin*60000);
   $('gTimer').textContent='⏱ '+txt;
   const st=effStatus();
   if(st==='ended'&&c.status==='playing'){
@@ -623,12 +646,15 @@ function renderScores(){
   const mine=role==='student'?myTeam():-1;
   $('scores').innerHTML=V.cfg.teams.map((t,i)=>`<div class="score ${i===mine?'mine':''}"><div class="n"><span>${EMOJI[i]}</span>${esc(t.name)} <small style="color:var(--mute);font-weight:500">${mem[i]}명</small></div><div class="c">${cs[i]}<small> 칸</small></div><div class="bar2" style="background:${COLORS[i]};width:${Math.max(3,cs[i]/total*100*3)}%;max-width:100%"></div></div>`).join('');
 }
+const mastCount=p=>Object.keys(p.mastered||{}).length;
+const mastPct=p=>V.cfg.words.length?Math.round(mastCount(p)/V.cfg.words.length*100):0;
 function renderMe(){
   const box=$('me');
   if(role!=='student'){box.innerHTML=`<span style="color:var(--mute)">🏰 하얀 테두리 칸은 근거지예요. 빼앗을 수 없어요.</span>`;return}
   const p=myPlayer();if(!p){box.innerHTML='';return}
   const lobby=effStatus()==='lobby';
-  box.innerHTML=`<span>${EMOJI[p.team]} <b>${esc(V.cfg.teams[p.team].name)}</b> · ${esc(p.name)}</span><span>정답 ${p.correct||0} · 오답 ${p.wrong||0} · 점령 ${p.cap||0}칸</span>`;
+  const mc=mastCount(p),tot=V.cfg.words.length,att=(p.correct||0)+(p.wrong||0),acc=att?Math.round((p.correct||0)/att*100):0;
+  box.innerHTML=`<span>${EMOJI[p.team]} <b>${esc(V.cfg.teams[p.team].name)}</b> · ${esc(p.name)}</span><span>점령 ${p.cap||0}칸 · 📘 단어 ${mc}/${tot} (<b>${mastPct(p)}%</b>) · 정답률 ${acc}%</span>`;
   if(lobby){const b=document.createElement('button');b.className='btn sub sm';b.textContent='모둠 바꾸기';b.onclick=()=>{teardown();showTeamSelect(code,p.name,V.cfg)};box.appendChild(b)}
 }
 function renderLog(){
@@ -644,8 +670,12 @@ function renderTools(){
   if(st==='playing'){add('⏸ 일시정지',()=>teacherAct('pause'),'sub');add('🏁 종료',()=>teacherAct('end'),'sub')}
   if(st==='paused'){add('▶ 다시 시작',()=>teacherAct('resume'));add('🏁 종료',()=>teacherAct('end'),'sub')}
   if(st==='ended')add('🔁 새 게임(지도 초기화)',()=>$('tReset').click());
-  const ps=Object.values(V.players).sort((a,b)=>(b.cap||0)-(a.cap||0)).slice(0,10);
-  $('tPlayers').innerHTML=ps.length?ps.map(p=>`<div><span>${EMOJI[p.team]||''} ${esc(p.name)}</span><span>${p.cap||0}칸 · 정답 ${p.correct||0}</span></div>`).join(''):'<div style="color:var(--mute)">아직 접속한 학생이 없어요</div>';
+  const all=Object.values(V.players),ps=all.slice().sort((a,b)=>(b.cap||0)-(a.cap||0)).slice(0,30);
+  $('tPlayers').innerHTML=ps.length?ps.map(p=>`<div><span>${EMOJI[p.team]||''} ${esc(p.name)}</span><span>${p.cap||0}칸 · 단어 ${mastPct(p)}%</span></div>`).join(''):'<div style="color:var(--mute)">아직 접속한 학생이 없어요</div>';
+  const avg=all.length?Math.round(all.reduce((s,p)=>s+mastPct(p),0)/all.length):0;
+  $('tMastery').innerHTML=all.length?`<div><span>학생 평균 (등록한 ${V.cfg.words.length}단어 중)</span><span><b>${avg}%</b></span></div>`:'';
+  const hard=Object.entries(V.wstats||{}).map(([i,s])=>({w:V.cfg.words[i],c:s.c||0,x:s.w||0})).filter(o=>o.w&&o.x>0).sort((a,b)=>b.x/(b.x+b.c)-a.x/(a.x+a.c)||b.x-a.x).slice(0,6);
+  $('tHard').innerHTML=hard.length?hard.map(o=>`<div><span>${esc(o.w.en)} <small style="color:var(--mute)">${esc(o.w.ko)}</small></span><span>${Math.round(o.x/(o.x+o.c)*100)}% 오답</span></div>`).join(''):'<div style="color:var(--mute)">아직 기록이 없어요</div>';
 }
 $('tCopy').onclick=async()=>{
   try{await navigator.clipboard.writeText($('tLink').value);toast('링크를 복사했어요')}
@@ -658,14 +688,17 @@ async function teacherAct(a){
   try{
     if(a==='start')await update(ref_,{status:'playing',endsAt:c.durationMin>0?now()+c.durationMin*60000:0,remainMs:0});
     if(a==='pause')await update(ref_,{status:'paused',remainMs:c.endsAt?Math.max(0,c.endsAt-now()):0});
-    if(a==='resume')await update(ref_,{status:'playing',endsAt:c.durationMin>0?now()+(c.remainMs||0):0});
+    if(a==='resume')await update(ref_,{status:'playing',endsAt:c.mode==='open'?(c.deadline>now()?c.deadline:0):(c.durationMin>0?now()+(c.remainMs||0):0)});
     if(a==='end')await update(ref_,{status:'ended'});
   }catch(e){toast('실패: '+e.message,4000)}
 }
 $('tReset').onclick=async()=>{
   if(!confirm('지도와 학생 기록을 모두 지우고 처음 상태로 되돌릴까요? (참가한 학생과 모둠은 그대로 유지돼요)'))return;
-  const u={cells:null,log:null,'config/status':'lobby','config/endsAt':0,'config/remainMs':0};
-  Object.keys(V.players).forEach(id=>{u[`players/${id}/correct`]=0;u[`players/${id}/wrong`]=0;u[`players/${id}/cap`]=0});
+  const open=V.cfg.mode==='open',dl=open&&V.cfg.deadline>now()?V.cfg.deadline:0;
+  const u={cells:null,log:null,'config/status':open?'playing':'lobby','config/endsAt':open?dl:0,'config/remainMs':0};
+  if(open&&!dl)u['config/deadline']=0;
+  Object.keys(V.players).forEach(id=>{u[`players/${id}/correct`]=0;u[`players/${id}/wrong`]=0;u[`players/${id}/cap`]=0;u[`players/${id}/mastered`]=null});
+  u.wstats=null;
   try{await update(ref(db,`rooms/${code}`),u);endGuard=false;toast('초기화했어요')}catch(e){toast('실패: '+e.message,4000)}
 };
 $('tDelete').onclick=async()=>{
@@ -674,15 +707,23 @@ $('tDelete').onclick=async()=>{
 };
 $('leaveBtn').onclick=()=>{if(role==='teacher'||confirm('나갈까요? (다시 들어오면 기록이 그대로 이어져요)'))goHome()};
 
-/* ---------------- 문제 ---------------- */
+/* ---------------- 문제 (객관식 1 + 주관식 2 = 땅 1칸) ---------------- */
+const STEPS=['choice','type','type'];
 function pickDir(v){return v==='mix'?(Math.random()<.5?'k2e':'e2k'):v}
-function buildQuestion(){
-  const W=V.cfg.words;
+function masteredMap(){const p=myPlayer();return (p&&p.mastered)||{}}
+function drawWord(exclude){
+  const W=V.cfg.words,m=masteredMap();
   if(!pool.length)pool=shuffle(W.map((_,i)=>i));
-  const w=W[pool.pop()];
-  const dir=pickDir(V.cfg.dir),fmtv=pickDir2(V.cfg.format);
+  const ok=pool.map((v,k)=>k).filter(k=>!exclude.includes(pool[k]));
+  if(!ok.length){pool=shuffle(W.map((_,i)=>i));return drawWord(exclude)}
+  const fresh=ok.filter(k=>!m[pool[k]]);
+  const list=(fresh.length&&Math.random()<.7)?fresh:ok;   // 아직 못 맞힌 단어를 더 자주 내요
+  return pool.splice(list[Math.floor(Math.random()*list.length)],1)[0];
+}
+function buildStep(idx,fmtv){
+  const W=V.cfg.words,w=W[idx],dir=pickDir(V.cfg.dir);
   const kos=w.ko.split('/').map(s=>s.trim()).filter(Boolean);
-  const q={w,kos,dir,fmt:fmtv,prompt:dir==='k2e'?kos.join(' / '):w.en};
+  const q={idx,w,kos,dir,fmt:fmtv,prompt:dir==='k2e'?kos.join(' / '):w.en};
   if(fmtv==='choice'){
     const correct=dir==='k2e'?w.en:kos[Math.floor(Math.random()*kos.length)];
     q.correct=correct;
@@ -692,41 +733,46 @@ function buildQuestion(){
   }
   return q;
 }
-function pickDir2(v){return v==='mix'?(Math.random()<.5?'type':'choice'):v}
 function isCorrect(q,val){
   if(q.fmt==='choice')return val===q.correct;
   if(q.dir==='k2e')return norm(val)===norm(q.w.en);
   return q.kos.some(k=>normKo(k)===normKo(val));
 }
 function openQuestion(x,y){
-  Q=buildQuestion();Q.x=x;Q.y=y;Q.start=Date.now();Q.done=false;
-  const p=myPlayer(),limit=V.cfg.limit*1000;
-  $('qWho').textContent=`${EMOJI[p.team]} ${V.cfg.teams[p.team].name} · ${p.name}`;
-  $('qText').textContent=Q.prompt;
-  $('qHint').textContent=(Q.fmt==='type'&&Q.dir==='k2e')?Q.w.en.replace(/[A-Za-z]/g,'_ ').trim():'';
+  const used=[];
+  const steps=STEPS.map(f=>{const i=drawWord(used);used.push(i);return buildStep(i,f)});
+  Q={x,y,steps,i:0,cur:null,done:false};
+  showStep();
+  $('qModal').classList.remove('hidden');
+}
+function showStep(){
+  const q=Q.steps[Q.i],p=myPlayer(),limit=V.cfg.limit*1000;
+  Q.cur=q;Q.done=false;Q.start=Date.now();Q.hinted=false;
+  const dots=STEPS.map((_,k)=>k<Q.i?'🟢':k===Q.i?'🔵':'⚪').join(' ');
+  $('qWho').textContent=`${EMOJI[p.team]} ${V.cfg.teams[p.team].name} · ${p.name}   ${dots}  문제 ${Q.i+1}/${STEPS.length} (${q.fmt==='choice'?'객관식':'주관식'})`;
+  $('qText').textContent=q.prompt;
+  $('qHint').textContent=(q.fmt==='type'&&q.dir==='k2e')?q.w.en.replace(/[A-Za-z]/g,'_ ').trim():'';
   $('qResult').textContent='';$('qResult').className='result';
-  const typed=Q.fmt==='type';
+  const typed=q.fmt==='type';
   $('qType').classList.toggle('hidden',!typed);
   $('qChoice').classList.toggle('hidden',typed);
   $('ans').value='';$('ans').disabled=false;$('qSubmit').disabled=false;
-  $('ans').placeholder=Q.dir==='k2e'?'영어 단어를 쓰세요':'우리말 뜻을 쓰세요';
-  if(!typed){
-    const box=$('qChoice');box.innerHTML='';
-    Q.options.forEach(o=>{const b=document.createElement('button');b.type='button';b.textContent=o;b.onclick=()=>submitAnswer(o,false,b);box.appendChild(b)});
-  }
-  $('qModal').classList.remove('hidden');
+  $('ans').placeholder=q.dir==='k2e'?'영어 단어를 쓰세요':'우리말 뜻을 쓰세요';
+  const box=$('qChoice');box.innerHTML='';
+  if(!typed)q.options.forEach(o=>{const b=document.createElement('button');b.type='button';b.textContent=o;b.onclick=()=>submitAnswer(o,false,b);box.appendChild(b)});
   if(typed)setTimeout(()=>$('ans').focus(),60);
   const bar=$('qBar');bar.style.width='100%';bar.style.background='var(--ok)';
   clearInterval(qTimer);
   qTimer=setInterval(()=>{
-    if(!Q){clearInterval(qTimer);return}
+    if(!Q||!Q.cur){clearInterval(qTimer);return}
     const left=limit-(Date.now()-Q.start),pc=Math.max(0,left/limit);
     bar.style.width=pc*100+'%';bar.style.background=pc>.5?'var(--ok)':pc>.25?'var(--gold)':'var(--bad)';
-    if(Q.fmt==='type'&&Q.dir==='k2e'&&pc<.5&&!Q.hinted){Q.hinted=true;const e=Q.w.en;$('qHint').textContent=e[0]+' '+e.slice(1).replace(/[A-Za-z]/g,'_ ').trim()}
+    const c=Q.cur;
+    if(c.fmt==='type'&&c.dir==='k2e'&&pc<.5&&!Q.hinted){Q.hinted=true;const e=c.w.en;$('qHint').textContent=e[0]+' '+e.slice(1).replace(/[A-Za-z]/g,'_ ').trim()}
     if(left<=0)submitAnswer('',true);
   },100);
 }
-$('qForm').addEventListener('submit',e=>{e.preventDefault();if(Q&&Q.fmt==='type'){const v=$('ans').value;if(v.trim())submitAnswer(v,false)}});
+$('qForm').addEventListener('submit',e=>{e.preventDefault();if(Q&&Q.cur&&Q.cur.fmt==='type'){const v=$('ans').value;if(v.trim())submitAnswer(v,false)}});
 function closeQ(silent){clearInterval(qTimer);Q=null;$('qModal').classList.add('hidden')}
 
 async function submitAnswer(val,timeout,btn){
@@ -734,39 +780,59 @@ async function submitAnswer(val,timeout,btn){
   Q.done=true;clearInterval(qTimer);
   $('ans').disabled=true;$('qSubmit').disabled=true;
   $('qChoice').querySelectorAll('button').forEach(b=>b.disabled=true);
-  const q=Q,ok=!timeout&&isCorrect(q,val),r=$('qResult');
+  const run=Q,q=run.cur,ok=!timeout&&isCorrect(q,val),r=$('qResult');
+  const last=run.i===STEPS.length-1;
   const ansText=q.fmt==='choice'?q.correct:(q.dir==='k2e'?q.w.en:q.kos.join(' / '));
-  let delay=2300;
+  let delay=2400,next=false;
   try{
     if(ok){
-      if(effStatus()!=='playing'){r.className='result bad';r.textContent='게임이 멈춰서 땅을 차지하지 못했어요';}
-      else if(owner(q.x,q.y)===myTeam()){r.className='result ok';r.textContent='⭕ 정답! 이미 우리 모둠 땅이 됐어요'}
-      else if(isBase(q.x,q.y)){r.className='result bad';r.textContent='근거지는 차지할 수 없어요'}
+      if(effStatus()!=='playing'){r.className='result bad';r.textContent='게임이 멈춰서 땅을 차지하지 못했어요'}
       else{
         if(btn)btn.classList.add('right');
-        const gained=await doCapture(q.x,q.y);
-        r.className='result ok';r.textContent='⭕ 정답!'+(gained>1?` 포위 성공! +${gained}칸 🎉`:' 땅을 차지했어요!');
-        delay=1300;cdUntil=Date.now()+700;
+        const upd={};
+        upd[`players/${pid}/correct`]=increment(1);
+        upd[`players/${pid}/mastered/${q.idx}`]=true;
+        upd[`wstats/${q.idx}/c`]=increment(1);
+        if(!last){
+          await update(ref(db,`rooms/${code}`),upd);
+          r.className='result ok';r.textContent=`⭕ 정답! 다음 문제 (${run.i+1}/${STEPS.length} 통과)`;
+          next=true;delay=900;
+        } else if(owner(run.x,run.y)===myTeam()){
+          await update(ref(db,`rooms/${code}`),upd);
+          r.className='result ok';r.textContent='⭕ 정답! 이미 우리 모둠 땅이 됐어요';
+        } else if(isBase(run.x,run.y)){
+          await update(ref(db,`rooms/${code}`),upd);
+          r.className='result bad';r.textContent='근거지는 차지할 수 없어요';
+        } else {
+          const gained=await doCapture(run.x,run.y,upd);
+          r.className='result ok';r.textContent='⭕ 3문제 통과! '+(gained>1?`포위 성공! +${gained}칸 🎉`:'땅을 차지했어요!');
+          delay=1500;cdUntil=Date.now()+700;
+        }
       }
     } else {
       if(btn)btn.classList.add('wrong');
       if(q.fmt==='choice')$('qChoice').querySelectorAll('button').forEach(b=>{if(b.textContent===q.correct)b.classList.add('right')});
-      r.className='result bad';r.innerHTML=`${timeout?'⏰ 시간 초과!':'❌ 아쉬워요!'} 정답: ${esc(ansText)}`;
+      r.className='result bad';r.innerHTML=`${timeout?'⏰ 시간 초과!':'❌ 아쉬워요!'} 정답: ${esc(ansText)}<br><small>처음부터 다시 도전해요</small>`;
       cdUntil=Date.now()+V.cfg.wrongCd*1000;
-      update(ref(db,`rooms/${code}/players/${pid}`),{wrong:increment(1)}).catch(()=>{});
+      const upd={};
+      upd[`players/${pid}/wrong`]=increment(1);
+      upd[`wstats/${q.idx}/w`]=increment(1);
+      update(ref(db,`rooms/${code}`),upd).catch(()=>{});
     }
   }catch(e){r.className='result bad';r.textContent='저장에 실패했어요: '+e.message}
-  setTimeout(()=>{if(Q===q)closeQ()},delay);
+  setTimeout(()=>{
+    if(Q!==run)return;
+    if(next){run.i++;showStep()}else closeQ();
+  },delay);
 }
 
-async function doCapture(x,y){
+async function doCapture(x,y,extra){
   const t=myTeam(),k=key(x,y),p=myPlayer();
   const otherBases=Object.keys(baseMap()).filter(bk=>baseMap()[bk]!==t);
-  const extra=enclosure(V.cfg.W,V.cfg.H,t,(cx,cy)=>(cx===x&&cy===y)?t:owner(cx,cy),otherBases);
-  const u={};
-  u[`cells/${k}`]=t;extra.forEach(e=>{u[`cells/${e}`]=t});
-  const gained=1+extra.length;
-  u[`players/${pid}/correct`]=increment(1);
+  const enc=enclosure(V.cfg.W,V.cfg.H,t,(cx,cy)=>(cx===x&&cy===y)?t:owner(cx,cy),otherBases);
+  const u=Object.assign({},extra||{});
+  u[`cells/${k}`]=t;enc.forEach(e=>{u[`cells/${e}`]=t});
+  const gained=1+enc.length;
   u[`players/${pid}/cap`]=increment(gained);
   const lk=push(ref(db,`rooms/${code}/log`)).key;
   u[`log/${lk}`]={ts:Date.now(),t,text:gained>1?`${p.name}(${V.cfg.teams[t].name}) 포위 성공! +${gained}칸 🎉`:`${p.name}(${V.cfg.teams[t].name})이(가) 땅을 차지했어요`};
@@ -780,7 +846,7 @@ function showResults(){
   const order=V.cfg.teams.map((t,i)=>({t,i,c:cs[i]})).sort((a,b)=>b.c-a.c);
   let h=order.map((o,i)=>`<div><span>${['🥇','🥈','🥉'][i]||(i+1)+'위'} ${EMOJI[o.i]} ${esc(o.t.name)}</span><span>${o.c}칸</span></div>`).join('');
   const top=Object.values(V.players).sort((a,b)=>(b.cap||0)-(a.cap||0)).slice(0,5);
-  if(top.length)h+=`<h4>⭐ 활약한 친구들</h4>`+top.map(p=>`<div><span>${EMOJI[p.team]||''} ${esc(p.name)}</span><span>점령 ${p.cap||0}칸 · 정답 ${p.correct||0}</span></div>`).join('');
+  if(top.length)h+=`<h4>⭐ 활약한 친구들</h4>`+top.map(p=>`<div><span>${EMOJI[p.team]||''} ${esc(p.name)}</span><span>점령 ${p.cap||0}칸 · 단어 ${mastPct(p)}%</span></div>`).join('');
   $('rank').innerHTML=h;
   $('endModal').classList.remove('hidden');
 }
