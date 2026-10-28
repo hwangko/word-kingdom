@@ -125,6 +125,7 @@ small.mute{color:var(--mute);font-weight:400}
       <input id="rCode" maxlength="4" placeholder="방 코드" size="6" style="text-transform:uppercase" autocapitalize="characters" autocomplete="off">
       <input id="rPin" type="password" inputmode="numeric" maxlength="8" placeholder="선생님 비밀번호" size="12" autocomplete="off">
       <button class="btn sub" id="resumeBtn">이어하기</button>
+      <button class="btn red sm" id="rDelBtn">방 삭제</button>
     </div>
   </div>
 </div></section>
@@ -164,7 +165,7 @@ small.mute{color:var(--mute);font-weight:400}
         <option value="e2k">영어 단어 → 뜻</option>
         <option value="mix">섞어서</option>
       </select></label>
-      <span class="chip">땅 1칸 = 객관식 1문제 + 주관식 2문제 모두 정답</span>
+      <span class="chip">땅 1칸 = 객관식 2문제 + 주관식 1문제 모두 정답</span>
     </div>
     <div class="row">
       <label>문제 1개당 제한 시간(초) <input type="number" id="cLimit" min="5" max="60" value="20" style="width:70px"></label>
@@ -402,8 +403,24 @@ function drawMyRooms(){
     d.innerHTML=`<span class="chip">${esc(r.code)}</span><span>${esc(r.title||'')}</span>`;
     const b=document.createElement('button');b.className='btn sub sm';b.textContent='이어하기';
     b.onclick=()=>{$('rCode').value=r.code;$('resumeBtn').click()};
-    d.appendChild(b);box.appendChild(d);
+    const x=document.createElement('button');x.className='btn red sm';x.textContent='삭제';
+    x.onclick=()=>deleteRoomFlow(r.code);
+    d.appendChild(b);d.appendChild(x);box.appendChild(d);
   });
+}
+async function deleteRoomFlow(c,pinGiven){
+  try{
+    const s=await get(ref(db,`rooms/${c}/config`));
+    if(!s.exists()){forgetRoom(c);drawMyRooms();toast('이미 없는 방이라 목록에서만 지웠어요');return}
+    const cfg=s.val();
+    if(cfg.pinHash){
+      let pin=pinGiven;
+      if(pin===undefined||pin===''){pin=prompt('선생님 비밀번호를 입력하세요');if(pin===null)return}
+      if(hashPin(String(pin).trim())!==cfg.pinHash){toast('비밀번호가 맞지 않아요');return}
+    }
+    if(!confirm(`방 ${c} (${cfg.title||''})을(를) 완전히 삭제할까요?\n모든 기록이 사라지고 복구할 수 없어요.`))return;
+    await remove(ref(db,`rooms/${c}`));forgetRoom(c);drawMyRooms();toast('방을 삭제했어요');
+  }catch(e){toast('삭제에 실패했어요: '+e.message,4000)}
 }
 function goHome(){teardown();code=null;role=null;closeQ(true);$('endModal').classList.add('hidden');drawMyRooms();show('v-home')}
 drawMyRooms();
@@ -503,6 +520,11 @@ $('cGo').onclick=async()=>{
     enterRoom(c,'teacher');
   }catch(e){toast('방 만들기에 실패했어요: '+e.message,4500)}
   $('cGo').disabled=false;
+};
+$('rDelBtn').onclick=()=>{
+  const c=$('rCode').value.trim().toUpperCase();
+  if(c.length<4){toast('삭제할 방 코드를 입력해 주세요');return}
+  deleteRoomFlow(c,$('rPin').value.trim());
 };
 $('resumeBtn').onclick=async()=>{
   const c=$('rCode').value.trim().toUpperCase(),pin=$('rPin').value.trim();
@@ -707,8 +729,8 @@ $('tDelete').onclick=async()=>{
 };
 $('leaveBtn').onclick=()=>{if(role==='teacher'||confirm('나갈까요? (다시 들어오면 기록이 그대로 이어져요)'))goHome()};
 
-/* ---------------- 문제 (객관식 1 + 주관식 2 = 땅 1칸) ---------------- */
-const STEPS=['choice','type','type'];
+/* ---------------- 문제 (객관식 2 + 주관식 1 = 땅 1칸) ---------------- */
+const STEPS=['choice','choice','type'];
 function pickDir(v){return v==='mix'?(Math.random()<.5?'k2e':'e2k'):v}
 function masteredMap(){const p=myPlayer();return (p&&p.mastered)||{}}
 function drawWord(exclude){
@@ -738,6 +760,11 @@ function isCorrect(q,val){
   if(q.dir==='k2e')return norm(val)===norm(q.w.en);
   return q.kos.some(k=>normKo(k)===normKo(val));
 }
+// 힌트: 시간이 30% 지나면 글자 1개, 60% 지나면 2개를 보여줘요 (영어는 알파벳, 한글은 글자)
+function hintText(q,n){
+  if(q.dir==='k2e'){let s=0;return [...q.w.en].map(ch=>{if(!/[A-Za-z]/.test(ch))return ch;if(s<n){s++;return ch}return '_'}).join(' ')}
+  return [...q.kos[0].replace(/\s+/g,'')].map((ch,i)=>i<n?ch:'○').join(' ');
+}
 function openQuestion(x,y){
   const used=[];
   const steps=STEPS.map(f=>{const i=drawWord(used);used.push(i);return buildStep(i,f)});
@@ -747,11 +774,11 @@ function openQuestion(x,y){
 }
 function showStep(){
   const q=Q.steps[Q.i],p=myPlayer(),limit=V.cfg.limit*1000;
-  Q.cur=q;Q.done=false;Q.start=Date.now();Q.hinted=false;
+  Q.cur=q;Q.done=false;Q.start=Date.now();Q.hintLv=0;
   const dots=STEPS.map((_,k)=>k<Q.i?'🟢':k===Q.i?'🔵':'⚪').join(' ');
   $('qWho').textContent=`${EMOJI[p.team]} ${V.cfg.teams[p.team].name} · ${p.name}   ${dots}  문제 ${Q.i+1}/${STEPS.length} (${q.fmt==='choice'?'객관식':'주관식'})`;
   $('qText').textContent=q.prompt;
-  $('qHint').textContent=(q.fmt==='type'&&q.dir==='k2e')?q.w.en.replace(/[A-Za-z]/g,'_ ').trim():'';
+  $('qHint').textContent=q.fmt==='type'?hintText(q,0):'';
   $('qResult').textContent='';$('qResult').className='result';
   const typed=q.fmt==='type';
   $('qType').classList.toggle('hidden',!typed);
@@ -768,7 +795,7 @@ function showStep(){
     const left=limit-(Date.now()-Q.start),pc=Math.max(0,left/limit);
     bar.style.width=pc*100+'%';bar.style.background=pc>.5?'var(--ok)':pc>.25?'var(--gold)':'var(--bad)';
     const c=Q.cur;
-    if(c.fmt==='type'&&c.dir==='k2e'&&pc<.5&&!Q.hinted){Q.hinted=true;const e=c.w.en;$('qHint').textContent=e[0]+' '+e.slice(1).replace(/[A-Za-z]/g,'_ ').trim()}
+    if(c.fmt==='type'){const lv=pc<.4?2:pc<.7?1:0;if(lv!==Q.hintLv){Q.hintLv=lv;$('qHint').textContent=hintText(c,lv)}}
     if(left<=0)submitAnswer('',true);
   },100);
 }
@@ -805,7 +832,7 @@ async function submitAnswer(val,timeout,btn){
           r.className='result bad';r.textContent='근거지는 차지할 수 없어요';
         } else {
           const gained=await doCapture(run.x,run.y,upd);
-          r.className='result ok';r.textContent='⭕ 3문제 통과! '+(gained>1?`포위 성공! +${gained}칸 🎉`:'땅을 차지했어요!');
+          r.className='result ok';r.textContent='⭕ '+STEPS.length+'문제 통과! '+(gained>1?`포위 성공! +${gained}칸 🎉`:'땅을 차지했어요!');
           delay=1500;cdUntil=Date.now()+700;
         }
       }
